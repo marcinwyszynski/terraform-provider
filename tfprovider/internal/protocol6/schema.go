@@ -79,6 +79,7 @@ func loadSchema(ctx context.Context, client tfplugin6.ProviderClient) (*common.S
 	}
 	var ret common.Schema
 	ret.ProviderConfig = decodeProviderSchemaBlock(resp.Provider.Block)
+	ret.ProviderMeta = decodeProviderSchemaBlock(resp.ProviderMeta.Block)
 	ret.ManagedResourceTypes = make(map[string]*common.ManagedResourceTypeSchema)
 	for name, raw := range resp.ResourceSchemas {
 		ret.ManagedResourceTypes[name] = &common.ManagedResourceTypeSchema{

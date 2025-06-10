@@ -6,6 +6,7 @@ import (
 
 type Schema struct {
 	ProviderConfig       *tfschema.Block
+	ProviderMeta         *tfschema.Block
 	ManagedResourceTypes map[string]*ManagedResourceTypeSchema
 	DataResourceTypes    map[string]*DataResourceTypeSchema
 }
