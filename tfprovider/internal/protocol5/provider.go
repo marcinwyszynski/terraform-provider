@@ -2,6 +2,7 @@ package protocol5
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/apparentlymart/terraform-provider/internal/tfplugin5"
@@ -148,6 +149,276 @@ func (p *Provider) ManagedResourceType(typeName string) common.ManagedResourceTy
 		typeName: typeName,
 		schema:   schema,
 	}
+}
+
+func (p *Provider) PlanResourceChange(ctx context.Context, req common.PlanResourceChangeRequest) (common.PlanResourceChangeResponse, common.Diagnostics) {
+	var diags common.Diagnostics
+
+	if moreDiags := p.requireConfigured(); moreDiags.HasErrors() {
+		return common.PlanResourceChangeResponse{}, moreDiags
+	}
+
+	schema, ok := p.schema.ManagedResourceTypes[req.TypeName]
+	if !ok {
+		diags = append(diags, common.Diagnostic{
+			Severity: common.Error,
+			Summary:  "Invalid resource type",
+			Detail:   fmt.Sprintf("The provider does not support resource type %q.", req.TypeName),
+		})
+		return common.PlanResourceChangeResponse{}, diags
+	}
+
+	priorDV, moreDiags := encodeDynamicValue(req.PriorState, schema.Content)
+	diags = append(diags, moreDiags...)
+	if moreDiags.HasErrors() {
+		return common.PlanResourceChangeResponse{}, diags
+	}
+
+	proposedDV, moreDiags := encodeDynamicValue(req.ProposedNewState, schema.Content)
+	diags = append(diags, moreDiags...)
+	if moreDiags.HasErrors() {
+		return common.PlanResourceChangeResponse{}, diags
+	}
+
+	configDV, moreDiags := encodeDynamicValue(req.Config, schema.Content)
+	diags = append(diags, moreDiags...)
+	if moreDiags.HasErrors() {
+		return common.PlanResourceChangeResponse{}, diags
+	}
+
+	var providerMetaDV *tfplugin5.DynamicValue
+	if !req.ProviderMeta.IsNull() {
+		dv, moreDiags := encodeDynamicValue(req.ProviderMeta, p.schema.ProviderMeta)
+		diags = append(diags, moreDiags...)
+		if moreDiags.HasErrors() {
+			return common.PlanResourceChangeResponse{}, diags
+		}
+		providerMetaDV = dv
+	}
+
+	resp, err := p.client.PlanResourceChange(ctx, &tfplugin5.PlanResourceChange_Request{
+		TypeName:         req.TypeName,
+		PriorState:       priorDV,
+		ProposedNewState: proposedDV,
+		Config:           configDV,
+		PriorPrivate:     req.PriorPrivate,
+		ProviderMeta:     providerMetaDV,
+	})
+	diags = append(diags, common.RPCErrorDiagnostics(err)...)
+	if err != nil {
+		return common.PlanResourceChangeResponse{}, diags
+	}
+
+	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
+
+	result := common.PlanResourceChangeResponse{
+		PlannedPrivate: resp.PlannedPrivate,
+	}
+
+	if resp.PlannedState != nil {
+		plannedState, moreDiags := decodeDynamicValue(resp.PlannedState, schema.Content)
+		diags = append(diags, moreDiags...)
+		result.PlannedState = plannedState
+	}
+
+	for _, attrPath := range resp.RequiresReplace {
+		path := decodeAttributePath(attrPath)
+		result.RequiresReplace = append(result.RequiresReplace, path)
+	}
+
+	return result, diags
+}
+
+func (p *Provider) ApplyResourceChange(ctx context.Context, req common.ApplyResourceChangeRequest) (common.ApplyResourceChangeResponse, common.Diagnostics) {
+	var diags common.Diagnostics
+
+	if moreDiags := p.requireConfigured(); moreDiags.HasErrors() {
+		return common.ApplyResourceChangeResponse{}, moreDiags
+	}
+
+	schema, ok := p.schema.ManagedResourceTypes[req.TypeName]
+	if !ok {
+		diags = append(diags, common.Diagnostic{
+			Severity: common.Error,
+			Summary:  "Invalid resource type",
+			Detail:   fmt.Sprintf("The provider does not support resource type %q.", req.TypeName),
+		})
+		return common.ApplyResourceChangeResponse{}, diags
+	}
+
+	priorDV, moreDiags := encodeDynamicValue(req.PriorState, schema.Content)
+	diags = append(diags, moreDiags...)
+	if moreDiags.HasErrors() {
+		return common.ApplyResourceChangeResponse{}, diags
+	}
+
+	plannedDV, moreDiags := encodeDynamicValue(req.PlannedState, schema.Content)
+	diags = append(diags, moreDiags...)
+	if moreDiags.HasErrors() {
+		return common.ApplyResourceChangeResponse{}, diags
+	}
+
+	configDV, moreDiags := encodeDynamicValue(req.Config, schema.Content)
+	diags = append(diags, moreDiags...)
+	if moreDiags.HasErrors() {
+		return common.ApplyResourceChangeResponse{}, diags
+	}
+
+	var providerMetaDV *tfplugin5.DynamicValue
+	if !req.ProviderMeta.IsNull() {
+		dv, moreDiags := encodeDynamicValue(req.ProviderMeta, p.schema.ProviderMeta)
+		diags = append(diags, moreDiags...)
+		if moreDiags.HasErrors() {
+			return common.ApplyResourceChangeResponse{}, diags
+		}
+		providerMetaDV = dv
+	}
+
+	resp, err := p.client.ApplyResourceChange(ctx, &tfplugin5.ApplyResourceChange_Request{
+		TypeName:       req.TypeName,
+		PriorState:     priorDV,
+		PlannedState:   plannedDV,
+		Config:         configDV,
+		PlannedPrivate: req.PlannedPrivate,
+		ProviderMeta:   providerMetaDV,
+	})
+	diags = append(diags, common.RPCErrorDiagnostics(err)...)
+	if err != nil {
+		return common.ApplyResourceChangeResponse{}, diags
+	}
+
+	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
+
+	result := common.ApplyResourceChangeResponse{
+		Private: resp.Private,
+	}
+
+	if resp.NewState != nil {
+		newState, moreDiags := decodeDynamicValue(resp.NewState, schema.Content)
+		diags = append(diags, moreDiags...)
+		result.NewState = newState
+	}
+
+	return result, diags
+}
+
+func (p *Provider) ReadResource(ctx context.Context, req common.ReadResourceRequest) (common.ReadResourceResponse, common.Diagnostics) {
+	var diags common.Diagnostics
+
+	if moreDiags := p.requireConfigured(); moreDiags.HasErrors() {
+		return common.ReadResourceResponse{}, moreDiags
+	}
+
+	schema, ok := p.schema.ManagedResourceTypes[req.TypeName]
+	if !ok {
+		diags = append(diags, common.Diagnostic{
+			Severity: common.Error,
+			Summary:  "Invalid resource type",
+			Detail:   fmt.Sprintf("The provider does not support resource type %q.", req.TypeName),
+		})
+		return common.ReadResourceResponse{}, diags
+	}
+
+	currentDV, moreDiags := encodeDynamicValue(req.CurrentState, schema.Content)
+	diags = append(diags, moreDiags...)
+	if moreDiags.HasErrors() {
+		return common.ReadResourceResponse{}, diags
+	}
+
+	var providerMetaDV *tfplugin5.DynamicValue
+	if !req.ProviderMeta.IsNull() {
+		dv, moreDiags := encodeDynamicValue(req.ProviderMeta, p.schema.ProviderMeta)
+		diags = append(diags, moreDiags...)
+		if moreDiags.HasErrors() {
+			return common.ReadResourceResponse{}, diags
+		}
+		providerMetaDV = dv
+	}
+
+	resp, err := p.client.ReadResource(ctx, &tfplugin5.ReadResource_Request{
+		TypeName:     req.TypeName,
+		CurrentState: currentDV,
+		Private:      req.Private,
+		ProviderMeta: providerMetaDV,
+	})
+	diags = append(diags, common.RPCErrorDiagnostics(err)...)
+	if err != nil {
+		return common.ReadResourceResponse{}, diags
+	}
+
+	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
+
+	result := common.ReadResourceResponse{
+		Private: resp.Private,
+	}
+
+	if resp.NewState != nil {
+		newState, moreDiags := decodeDynamicValue(resp.NewState, schema.Content)
+		diags = append(diags, moreDiags...)
+		result.NewState = newState
+	}
+
+	return result, diags
+}
+
+func (p *Provider) ImportResourceState(ctx context.Context, req common.ImportResourceStateRequest) (common.ImportResourceStateResponse, common.Diagnostics) {
+	var diags common.Diagnostics
+
+	if moreDiags := p.requireConfigured(); moreDiags.HasErrors() {
+		return common.ImportResourceStateResponse{}, moreDiags
+	}
+
+	schema, ok := p.schema.ManagedResourceTypes[req.TypeName]
+	if !ok {
+		diags = append(diags, common.Diagnostic{
+			Severity: common.Error,
+			Summary:  "Invalid resource type",
+			Detail:   fmt.Sprintf("The provider does not support resource type %q.", req.TypeName),
+		})
+		return common.ImportResourceStateResponse{}, diags
+	}
+
+	resp, err := p.client.ImportResourceState(ctx, &tfplugin5.ImportResourceState_Request{
+		TypeName: req.TypeName,
+		Id:       req.ID,
+	})
+	diags = append(diags, common.RPCErrorDiagnostics(err)...)
+	if err != nil {
+		return common.ImportResourceStateResponse{}, diags
+	}
+
+	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
+
+	result := common.ImportResourceStateResponse{}
+
+	for _, imported := range resp.ImportedResources {
+		importedSchema := schema
+		if imported.TypeName != req.TypeName {
+			// Check if the returned type name is valid
+			if altSchema, ok := p.schema.ManagedResourceTypes[imported.TypeName]; ok {
+				importedSchema = altSchema
+			} else {
+				diags = append(diags, common.Diagnostic{
+					Severity: common.Error,
+					Summary:  "Invalid imported resource type",
+					Detail:   fmt.Sprintf("The provider returned an invalid resource type %q during import.", imported.TypeName),
+				})
+				continue
+			}
+		}
+
+		state, moreDiags := decodeDynamicValue(imported.State, importedSchema.Content)
+		diags = append(diags, moreDiags...)
+		if !moreDiags.HasErrors() {
+			result.ImportedResources = append(result.ImportedResources, common.ImportedResource{
+				TypeName: imported.TypeName,
+				State:    state,
+				Private:  imported.Private,
+			})
+		}
+	}
+
+	return result, diags
 }
 
 func (p *Provider) Close() error {

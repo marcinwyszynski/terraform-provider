@@ -58,6 +58,31 @@ type Provider interface {
 	// method. An unconfigured provider always returns nil.
 	ManagedResourceType(name string) ManagedResourceType
 
+	// PlanResourceChange produces a plan for changing a managed resource
+	// from its prior state to a proposed new state.
+	//
+	// The provider must be configured using [Configure] before calling this
+	// method.
+	PlanResourceChange(ctx context.Context, req common.PlanResourceChangeRequest) (common.PlanResourceChangeResponse, Diagnostics)
+
+	// ApplyResourceChange applies a planned change to a managed resource.
+	//
+	// The provider must be configured using [Configure] before calling this
+	// method.
+	ApplyResourceChange(ctx context.Context, req common.ApplyResourceChangeRequest) (common.ApplyResourceChangeResponse, Diagnostics)
+
+	// ReadResource reads current state of a managed resource.
+	//
+	// The provider must be configured using [Configure] before calling this
+	// method.
+	ReadResource(ctx context.Context, req common.ReadResourceRequest) (common.ReadResourceResponse, Diagnostics)
+
+	// ImportResourceState imports an existing resource into Terraform state.
+	//
+	// The provider must be configured using [Configure] before calling this
+	// method.
+	ImportResourceState(ctx context.Context, req common.ImportResourceStateRequest) (common.ImportResourceStateResponse, Diagnostics)
+
 	// Close kills the child process for this provider plugin, rendering the
 	// reciever unusable. Any further calls on the object after Close returns
 	// cause undefined behavior.
