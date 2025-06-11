@@ -42,46 +42,21 @@ type Provider interface {
 	// The given Config must have been prepared using PrepareConfig.
 	Configure(ctx context.Context, config Config) Diagnostics
 
-	// ValidateManagedResourceConfig runs the provider's validation logic
-	// for a particular managed resource type.
-	ValidateManagedResourceConfig(ctx context.Context, typeName string, config cty.Value) Diagnostics
-
-	// ValidateDataResourceConfig runs the provider's validation logic
-	// for a particular managed resource type.
-	ValidateDataResourceConfig(ctx context.Context, typeName string, config cty.Value) Diagnostics
-
 	// ManagedResourceType returns an object representing the managed resource
-	// type with the given name, or nil if the provider has no such managed
+	// type with the given name, or an error if the provider has no such managed
 	// resource type.
 	//
 	// The provider must be configured using [Configure] before calling this
-	// method. An unconfigured provider always returns nil.
-	ManagedResourceType(name string) ManagedResourceType
+	// method. An unconfigured provider always returns an error.
+	ManagedResourceType(name string) (ManagedResourceType, error)
 
-	// PlanResourceChange produces a plan for changing a managed resource
-	// from its prior state to a proposed new state.
+	// DataResourceType returns an object representing the data resource
+	// type with the given name, or an error if the provider has no such data
+	// resource type.
 	//
 	// The provider must be configured using [Configure] before calling this
-	// method.
-	PlanResourceChange(ctx context.Context, req common.PlanResourceChangeRequest) (common.PlanResourceChangeResponse, Diagnostics)
-
-	// ApplyResourceChange applies a planned change to a managed resource.
-	//
-	// The provider must be configured using [Configure] before calling this
-	// method.
-	ApplyResourceChange(ctx context.Context, req common.ApplyResourceChangeRequest) (common.ApplyResourceChangeResponse, Diagnostics)
-
-	// ReadResource reads current state of a managed resource.
-	//
-	// The provider must be configured using [Configure] before calling this
-	// method.
-	ReadResource(ctx context.Context, req common.ReadResourceRequest) (common.ReadResourceResponse, Diagnostics)
-
-	// ImportResourceState imports an existing resource into Terraform state.
-	//
-	// The provider must be configured using [Configure] before calling this
-	// method.
-	ImportResourceState(ctx context.Context, req common.ImportResourceStateRequest) (common.ImportResourceStateResponse, Diagnostics)
+	// method. An unconfigured provider always returns an error.
+	DataResourceType(name string) (DataResourceType, error)
 
 	// Close kills the child process for this provider plugin, rendering the
 	// reciever unusable. Any further calls on the object after Close returns

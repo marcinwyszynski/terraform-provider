@@ -56,9 +56,9 @@ func (p *Provider) PrepareConfig(ctx context.Context, config cty.Value) (common.
 	// doesn't have that separate step anymore.
 	_, diags := encodeDynamicValue(config, p.schema.ProviderConfig)
 	if diags.HasErrors() {
-		return common.Config{config}, diags
+		return common.Config{Value: config}, diags
 	}
-	return common.Config{config}, diags
+	return common.Config{Value: config}, diags
 }
 
 func (p *Provider) Configure(ctx context.Context, config common.Config) common.Diagnostics {
@@ -92,363 +92,47 @@ func (p *Provider) Configure(ctx context.Context, config common.Config) common.D
 	return diags
 }
 
-func (p *Provider) ValidateManagedResourceConfig(ctx context.Context, typeName string, config cty.Value) common.Diagnostics {
-	dv, diags := encodeDynamicValue(config, p.schema.ProviderConfig)
-	if diags.HasErrors() {
-		return diags
-	}
-	resp, err := p.client.ValidateResourceConfig(ctx, &tfplugin6.ValidateResourceConfig_Request{
-		Config: dv,
-	})
-	diags = append(diags, common.RPCErrorDiagnostics(err)...)
-	if err != nil {
-		return diags
-	}
-	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
-	return diags
-}
 
-func (p *Provider) ValidateDataResourceConfig(ctx context.Context, typeName string, config cty.Value) common.Diagnostics {
-	dv, diags := encodeDynamicValue(config, p.schema.ProviderConfig)
-	if diags.HasErrors() {
-		return diags
-	}
-	resp, err := p.client.ValidateDataResourceConfig(ctx, &tfplugin6.ValidateDataResourceConfig_Request{
-		Config: dv,
-	})
-	diags = append(diags, common.RPCErrorDiagnostics(err)...)
-	if err != nil {
-		return diags
-	}
-	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
-	return diags
-}
-
-func (p *Provider) ManagedResourceType(typeName string) common.ManagedResourceType {
+func (p *Provider) ManagedResourceType(typeName string) (common.ManagedResourceType, error) {
 	p.configuredMu.Lock()
 	if !p.configured {
-		return nil
+		p.configuredMu.Unlock()
+		return nil, fmt.Errorf("provider not configured")
 	}
 	p.configuredMu.Unlock()
 
 	schema, ok := p.schema.ManagedResourceTypes[typeName]
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("managed resource type %q not found", typeName)
 	}
 	return &ManagedResourceType{
-		client:   p.client,
-		typeName: typeName,
-		schema:   schema,
-	}
+		client:             p.client,
+		typeName:           typeName,
+		schema:             schema,
+		providerMetaSchema: p.schema.ProviderMeta,
+	}, nil
 }
 
-func (p *Provider) PlanResourceChange(ctx context.Context, req common.PlanResourceChangeRequest) (common.PlanResourceChangeResponse, common.Diagnostics) {
-	var diags common.Diagnostics
-
-	schema, moreDiags := p.commonResourceValidation(req.TypeName)
-	if moreDiags.HasErrors() {
-		return common.PlanResourceChangeResponse{}, moreDiags
+func (p *Provider) DataResourceType(typeName string) (common.DataResourceType, error) {
+	p.configuredMu.Lock()
+	if !p.configured {
+		p.configuredMu.Unlock()
+		return nil, fmt.Errorf("provider not configured")
 	}
+	p.configuredMu.Unlock()
 
-	values, moreDiags := p.encodePlanValues(schema, req.PriorState, req.ProposedNewState, req.Config)
-	diags = append(diags, moreDiags...)
-	if moreDiags.HasErrors() {
-		return common.PlanResourceChangeResponse{}, diags
+	schema, ok := p.schema.DataResourceTypes[typeName]
+	if !ok {
+		return nil, fmt.Errorf("data resource type %q not found", typeName)
 	}
-
-	providerMetaDV, moreDiags := p.encodeProviderMeta(req.ProviderMeta)
-	diags = append(diags, moreDiags...)
-	if moreDiags.HasErrors() {
-		return common.PlanResourceChangeResponse{}, diags
-	}
-
-	resp, err := p.client.PlanResourceChange(ctx, &tfplugin6.PlanResourceChange_Request{
-		TypeName:         req.TypeName,
-		PriorState:       values.Prior,
-		ProposedNewState: values.Proposed,
-		Config:           values.Config,
-		PriorPrivate:     req.PriorPrivate,
-		ProviderMeta:     providerMetaDV,
-	})
-	diags = append(diags, common.RPCErrorDiagnostics(err)...)
-	if err != nil {
-		return common.PlanResourceChangeResponse{}, diags
-	}
-
-	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
-
-	result := common.PlanResourceChangeResponse{
-		PlannedPrivate: resp.PlannedPrivate,
-	}
-
-	if resp.PlannedState != nil {
-		plannedState, moreDiags := decodeDynamicValue(resp.PlannedState, schema.Content)
-		diags = append(diags, moreDiags...)
-		result.PlannedState = plannedState
-	}
-
-	for _, attrPath := range resp.RequiresReplace {
-		path := decodeAttributePath(attrPath)
-		result.RequiresReplace = append(result.RequiresReplace, path)
-	}
-
-	return result, diags
-}
-
-func (p *Provider) ApplyResourceChange(ctx context.Context, req common.ApplyResourceChangeRequest) (common.ApplyResourceChangeResponse, common.Diagnostics) {
-	var diags common.Diagnostics
-
-	schema, moreDiags := p.commonResourceValidation(req.TypeName)
-	if moreDiags.HasErrors() {
-		return common.ApplyResourceChangeResponse{}, moreDiags
-	}
-
-	values, moreDiags := p.encodeApplyValues(schema, req.PriorState, req.PlannedState, req.Config)
-	diags = append(diags, moreDiags...)
-	if moreDiags.HasErrors() {
-		return common.ApplyResourceChangeResponse{}, diags
-	}
-
-	providerMetaDV, moreDiags := p.encodeProviderMeta(req.ProviderMeta)
-	diags = append(diags, moreDiags...)
-	if moreDiags.HasErrors() {
-		return common.ApplyResourceChangeResponse{}, diags
-	}
-
-	resp, err := p.client.ApplyResourceChange(ctx, &tfplugin6.ApplyResourceChange_Request{
-		TypeName:       req.TypeName,
-		PriorState:     values.Prior,
-		PlannedState:   values.Planned,
-		Config:         values.Config,
-		PlannedPrivate: req.PlannedPrivate,
-		ProviderMeta:   providerMetaDV,
-	})
-	diags = append(diags, common.RPCErrorDiagnostics(err)...)
-	if err != nil {
-		return common.ApplyResourceChangeResponse{}, diags
-	}
-
-	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
-
-	result := common.ApplyResourceChangeResponse{
-		Private: resp.Private,
-	}
-
-	if resp.NewState != nil {
-		newState, moreDiags := decodeDynamicValue(resp.NewState, schema.Content)
-		diags = append(diags, moreDiags...)
-		result.NewState = newState
-	}
-
-	return result, diags
-}
-
-func (p *Provider) ReadResource(ctx context.Context, req common.ReadResourceRequest) (common.ReadResourceResponse, common.Diagnostics) {
-	var diags common.Diagnostics
-
-	schema, moreDiags := p.commonResourceValidation(req.TypeName)
-	if moreDiags.HasErrors() {
-		return common.ReadResourceResponse{}, moreDiags
-	}
-
-	values, moreDiags := p.encodeCurrentValue(schema, req.CurrentState)
-	diags = append(diags, moreDiags...)
-	if moreDiags.HasErrors() {
-		return common.ReadResourceResponse{}, diags
-	}
-
-	providerMetaDV, moreDiags := p.encodeProviderMeta(req.ProviderMeta)
-	diags = append(diags, moreDiags...)
-	if moreDiags.HasErrors() {
-		return common.ReadResourceResponse{}, diags
-	}
-
-	resp, err := p.client.ReadResource(ctx, &tfplugin6.ReadResource_Request{
-		TypeName:     req.TypeName,
-		CurrentState: values.Current,
-		Private:      req.Private,
-		ProviderMeta: providerMetaDV,
-	})
-	diags = append(diags, common.RPCErrorDiagnostics(err)...)
-	if err != nil {
-		return common.ReadResourceResponse{}, diags
-	}
-
-	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
-
-	result := common.ReadResourceResponse{
-		Private: resp.Private,
-	}
-
-	if resp.NewState != nil {
-		newState, moreDiags := decodeDynamicValue(resp.NewState, schema.Content)
-		diags = append(diags, moreDiags...)
-		result.NewState = newState
-	}
-
-	return result, diags
-}
-
-func (p *Provider) ImportResourceState(ctx context.Context, req common.ImportResourceStateRequest) (common.ImportResourceStateResponse, common.Diagnostics) {
-	var diags common.Diagnostics
-
-	schema, moreDiags := p.commonResourceValidation(req.TypeName)
-	if moreDiags.HasErrors() {
-		return common.ImportResourceStateResponse{}, moreDiags
-	}
-
-	resp, err := p.client.ImportResourceState(ctx, &tfplugin6.ImportResourceState_Request{
-		TypeName: req.TypeName,
-		Id:       req.ID,
-	})
-	diags = append(diags, common.RPCErrorDiagnostics(err)...)
-	if err != nil {
-		return common.ImportResourceStateResponse{}, diags
-	}
-
-	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
-
-	result := common.ImportResourceStateResponse{}
-
-	for _, imported := range resp.ImportedResources {
-		importedSchema := schema
-		if imported.TypeName != req.TypeName {
-			// Check if the returned type name is valid
-			if altSchema, ok := p.schema.ManagedResourceTypes[imported.TypeName]; ok {
-				importedSchema = altSchema
-			} else {
-				diags = append(diags, common.Diagnostic{
-					Severity: common.Error,
-					Summary:  "Invalid imported resource type",
-					Detail:   fmt.Sprintf("The provider returned an invalid resource type %q during import.", imported.TypeName),
-				})
-				continue
-			}
-		}
-
-		state, moreDiags := decodeDynamicValue(imported.State, importedSchema.Content)
-		diags = append(diags, moreDiags...)
-		if !moreDiags.HasErrors() {
-			result.ImportedResources = append(result.ImportedResources, common.ImportedResource{
-				TypeName: imported.TypeName,
-				State:    state,
-				Private:  imported.Private,
-			})
-		}
-	}
-
-	return result, diags
+	return &DataResourceType{
+		client:             p.client,
+		typeName:           typeName,
+		schema:             schema,
+		providerMetaSchema: p.schema.ProviderMeta,
+	}, nil
 }
 
 func (p *Provider) Close() error {
 	return p.plugin.Close()
-}
-
-func (p *Provider) requireConfigured() common.Diagnostics {
-	p.configuredMu.Lock()
-	var diags common.Diagnostics
-	if !p.configured {
-		diags = append(diags, common.Diagnostic{
-			Severity: common.Error,
-			Summary:  "Provider unconfigured",
-			Detail:   "This operation requires a configured provider, but the provider isn't configured yet.",
-		})
-	}
-	p.configuredMu.Unlock()
-	return diags
-}
-
-// validateResourceType checks if the given resource type is supported and returns its schema
-func (p *Provider) validateResourceType(typeName string) (*common.ManagedResourceTypeSchema, common.Diagnostics) {
-	schema, ok := p.schema.ManagedResourceTypes[typeName]
-	if !ok {
-		return nil, common.Diagnostics{
-			{
-				Severity: common.Error,
-				Summary:  "Invalid resource type",
-				Detail:   fmt.Sprintf("The provider does not support resource type %q.", typeName),
-			},
-		}
-	}
-	return schema, nil
-}
-
-// encodeProviderMeta encodes the provider metadata if present
-func (p *Provider) encodeProviderMeta(providerMeta cty.Value) (*tfplugin6.DynamicValue, common.Diagnostics) {
-	if providerMeta.IsNull() {
-		return nil, nil
-	}
-	return encodeDynamicValue(providerMeta, p.schema.ProviderMeta)
-}
-
-// commonResourceValidation performs the common validation steps for resource operations
-func (p *Provider) commonResourceValidation(typeName string) (*common.ManagedResourceTypeSchema, common.Diagnostics) {
-	if diags := p.requireConfigured(); diags.HasErrors() {
-		return nil, diags
-	}
-	return p.validateResourceType(typeName)
-}
-
-// EncodedValues holds encoded dynamic values for resource operations
-type EncodedValues struct {
-	Prior     *tfplugin6.DynamicValue
-	Proposed  *tfplugin6.DynamicValue
-	Planned   *tfplugin6.DynamicValue
-	Config    *tfplugin6.DynamicValue
-	Current   *tfplugin6.DynamicValue
-}
-
-// encodePlanValues encodes the values needed for PlanResourceChange
-func (p *Provider) encodePlanValues(schema *common.ManagedResourceTypeSchema, prior, proposed, config cty.Value) (EncodedValues, common.Diagnostics) {
-	var diags common.Diagnostics
-	var result EncodedValues
-	
-	var err common.Diagnostics
-	result.Prior, err = encodeDynamicValue(prior, schema.Content)
-	diags = append(diags, err...)
-	if err.HasErrors() {
-		return result, diags
-	}
-	
-	result.Proposed, err = encodeDynamicValue(proposed, schema.Content)
-	diags = append(diags, err...)
-	if err.HasErrors() {
-		return result, diags
-	}
-	
-	result.Config, err = encodeDynamicValue(config, schema.Content)
-	diags = append(diags, err...)
-	return result, diags
-}
-
-// encodeApplyValues encodes the values needed for ApplyResourceChange
-func (p *Provider) encodeApplyValues(schema *common.ManagedResourceTypeSchema, prior, planned, config cty.Value) (EncodedValues, common.Diagnostics) {
-	var diags common.Diagnostics
-	var result EncodedValues
-	
-	var err common.Diagnostics
-	result.Prior, err = encodeDynamicValue(prior, schema.Content)
-	diags = append(diags, err...)
-	if err.HasErrors() {
-		return result, diags
-	}
-	
-	result.Planned, err = encodeDynamicValue(planned, schema.Content)
-	diags = append(diags, err...)
-	if err.HasErrors() {
-		return result, diags
-	}
-	
-	result.Config, err = encodeDynamicValue(config, schema.Content)
-	diags = append(diags, err...)
-	return result, diags
-}
-
-// encodeCurrentValue encodes a single current state value for ReadResource
-func (p *Provider) encodeCurrentValue(schema *common.ManagedResourceTypeSchema, current cty.Value) (EncodedValues, common.Diagnostics) {
-	var result EncodedValues
-	var diags common.Diagnostics
-	
-	result.Current, diags = encodeDynamicValue(current, schema.Content)
-	return result, diags
 }
