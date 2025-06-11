@@ -1,16 +1,18 @@
 package common
 
 import (
-	"fmt"
-	"strings"
-
-	grpcStatus "google.golang.org/grpc/status"
-
 	"github.com/zclconf/go-cty/cty"
 )
 
-type Diagnostics []Diagnostic
+// DiagnosticSeverity represents the severity level of a diagnostic
+type DiagnosticSeverity int
 
+const (
+	Error DiagnosticSeverity = iota
+	Warning
+)
+
+// Diagnostic represents a single diagnostic message
 type Diagnostic struct {
 	Severity  DiagnosticSeverity
 	Summary   string
@@ -18,13 +20,10 @@ type Diagnostic struct {
 	Attribute cty.Path
 }
 
-type DiagnosticSeverity rune
+// Diagnostics represents a collection of diagnostic messages
+type Diagnostics []Diagnostic
 
-const (
-	Error   DiagnosticSeverity = 'E'
-	Warning DiagnosticSeverity = 'W'
-)
-
+// HasErrors returns true if any diagnostic has Error severity
 func (diags Diagnostics) HasErrors() bool {
 	for _, diag := range diags {
 		if diag.Severity == Error {
@@ -34,80 +33,27 @@ func (diags Diagnostics) HasErrors() bool {
 	return false
 }
 
+// ErrorDiagnostics creates a diagnostic with Error severity from an error
+func ErrorDiagnostics(summary, detail string, err error) Diagnostics {
+	return Diagnostics{
+		{
+			Severity: Error,
+			Summary:  summary,
+			Detail:   detail + ": " + err.Error(),
+		},
+	}
+}
+
+// RPCErrorDiagnostics creates a diagnostic for RPC errors
 func RPCErrorDiagnostics(err error) Diagnostics {
 	if err == nil {
 		return nil
 	}
-	var diags Diagnostics
-	status, ok := grpcStatus.FromError(err)
-	if !ok {
-		diags = append(diags, Diagnostic{
+	return Diagnostics{
+		{
 			Severity: Error,
-			Summary:  "Failed to call provider plugin",
-			Detail:   fmt.Sprintf("Provider RPC call failed: %s.", err),
-		})
-	} else {
-		diags = append(diags, Diagnostic{
-			Severity: Error,
-			Summary:  "Failed to call provider plugin",
-			Detail:   fmt.Sprintf("Provider returned RPC error %s: %s.", status.Code(), status.Message()),
-		})
+			Summary:  "RPC communication error",
+			Detail:   "Error while calling provider: " + err.Error(),
+		},
 	}
-	return diags
-}
-
-func ErrorDiagnostics(summary, detailPrefix string, err error) Diagnostics {
-	switch err := err.(type) {
-	case nil:
-		return nil
-	case cty.PathError:
-		return Diagnostics{
-			{
-				Severity:  Error,
-				Summary:   summary,
-				Detail:    fmt.Sprintf("%s: %s.", detailPrefix, err.Error()),
-				Attribute: err.Path,
-			},
-		}
-	default:
-		return Diagnostics{
-			{
-				Severity: Error,
-				Summary:  summary,
-				Detail:   fmt.Sprintf("%s: %s.", detailPrefix, err.Error()),
-			},
-		}
-	}
-
-}
-
-func FormatError(err error) string {
-	switch err := err.(type) {
-	case cty.PathError:
-		return fmt.Sprintf("%s: %s", FormatCtyPath(err.Path), err.Error())
-	default:
-		return err.Error()
-	}
-}
-
-func FormatCtyPath(path cty.Path) string {
-	var buf strings.Builder
-	for _, step := range path {
-		switch step := step.(type) {
-		case cty.GetAttrStep:
-			buf.WriteString("." + step.Name)
-		case cty.IndexStep:
-			switch step.Key.Type() {
-			case cty.String:
-				fmt.Fprintf(&buf, "[%q]", step.Key.AsString())
-			case cty.Number:
-				fmt.Fprintf(&buf, "[%s]", step.Key.AsBigFloat().Text('f', 0))
-			default:
-				buf.WriteString("[...]")
-			}
-		default:
-			buf.WriteString("[...]")
-		}
-	}
-	return buf.String()
 }

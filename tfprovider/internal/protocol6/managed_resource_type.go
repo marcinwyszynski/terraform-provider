@@ -2,11 +2,13 @@ package protocol6
 
 import (
 	"context"
+	"fmt"
+
+	"github.com/apparentlymart/terraform-schema-go/tfschema"
+	"github.com/zclconf/go-cty/cty"
 
 	"github.com/apparentlymart/terraform-provider/internal/tfplugin6"
 	"github.com/apparentlymart/terraform-provider/tfprovider/internal/common"
-	"github.com/apparentlymart/terraform-schema-go/tfschema"
-	"github.com/zclconf/go-cty/cty"
 )
 
 type ManagedResourceType struct {
@@ -200,8 +202,15 @@ func (rt *ManagedResourceType) Import(ctx context.Context, req common.ManagedRes
 	result := common.ManagedResourceImportResponse{}
 
 	for _, imported := range resp.ImportedResources {
-		// For now, assume all imported resources use the same schema
-		// In a more sophisticated implementation, we'd validate the type
+		// Validate that imported resource type matches expected type
+		if imported.TypeName != rt.typeName {
+			diags = append(diags, common.Diagnostic{
+				Severity: common.Error,
+				Summary:  "Import type mismatch",
+				Detail:   fmt.Sprintf("Expected resource type %q, but provider returned %q during import", rt.typeName, imported.TypeName),
+			})
+			continue
+		}
 		state, moreDiags := decodeDynamicValue(imported.State, rt.schema.Content)
 		diags = append(diags, moreDiags...)
 		if !moreDiags.HasErrors() {

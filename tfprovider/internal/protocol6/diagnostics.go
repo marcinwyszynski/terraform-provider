@@ -1,9 +1,10 @@
 package protocol6
 
 import (
+	"github.com/zclconf/go-cty/cty"
+
 	"github.com/apparentlymart/terraform-provider/internal/tfplugin6"
 	"github.com/apparentlymart/terraform-provider/tfprovider/internal/common"
-	"github.com/zclconf/go-cty/cty"
 )
 
 func decodeDiagnostics(raws []*tfplugin6.Diagnostic) common.Diagnostics {

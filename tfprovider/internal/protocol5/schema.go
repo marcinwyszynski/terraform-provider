@@ -7,7 +7,6 @@ import (
 	"github.com/apparentlymart/terraform-schema-go/tfschema"
 	"github.com/zclconf/go-cty/cty"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
-	ctymsgpack "github.com/zclconf/go-cty/cty/msgpack"
 
 	"github.com/apparentlymart/terraform-provider/internal/tfplugin5"
 	"github.com/apparentlymart/terraform-provider/tfprovider/internal/common"
@@ -97,50 +96,20 @@ func loadSchema(ctx context.Context, client tfplugin5.ProviderClient) (*common.S
 }
 
 func encodeDynamicValue(val cty.Value, schema *tfschema.Block) (*tfplugin5.DynamicValue, common.Diagnostics) {
-	ty := schema.ImpliedType()
-	raw, err := ctymsgpack.Marshal(val, ty)
-	if err != nil {
-		return nil, common.ErrorDiagnostics(
-			"Invalid object",
-			"Value does not have the required type",
-			err,
-		)
+	data, diags := common.EncodeDynamicValue(val, schema)
+	if diags.HasErrors() {
+		return nil, diags
 	}
 	return &tfplugin5.DynamicValue{
-		Msgpack: raw,
+		Json:    data.JSON,
+		Msgpack: data.Msgpack,
 	}, nil
 }
 
 func decodeDynamicValue(raw *tfplugin5.DynamicValue, schema *tfschema.Block) (cty.Value, common.Diagnostics) {
-	ty := schema.ImpliedType()
-	switch {
-	case len(raw.Json) > 0:
-		val, err := ctyjson.Unmarshal(raw.Json, ty)
-		if err != nil {
-			return cty.DynamicVal, common.ErrorDiagnostics(
-				"Provider returned invalid object",
-				"Provider's JSON response does not conform to the expected type",
-				err,
-			)
-		}
-		return val, nil
-	case len(raw.Msgpack) > 0:
-		val, err := ctymsgpack.Unmarshal(raw.Json, ty)
-		if err != nil {
-			return cty.DynamicVal, common.ErrorDiagnostics(
-				"Provider returned invalid object",
-				"Provider's msgpack response does not conform to the expected type",
-				err,
-			)
-		}
-		return val, nil
-	default:
-		return cty.DynamicVal, common.Diagnostics{
-			{
-				Severity: common.Error,
-				Summary:  "Provider using unsupported response format",
-				Detail:   "Provider's response is not in either JSON or msgpack format",
-			},
-		}
+	data := common.DynamicValueData{
+		JSON:    raw.Json,
+		Msgpack: raw.Msgpack,
 	}
+	return common.DecodeDynamicValue(data, schema)
 }

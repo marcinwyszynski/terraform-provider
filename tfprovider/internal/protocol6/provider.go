@@ -3,41 +3,44 @@ package protocol6
 import (
 	"context"
 	"fmt"
-	"sync"
+	"sync/atomic"
+
+	"github.com/zclconf/go-cty/cty"
+	"go.rpcplugin.org/rpcplugin"
 
 	"github.com/apparentlymart/terraform-provider/internal/tfplugin6"
 	"github.com/apparentlymart/terraform-provider/tfprovider/internal/common"
-	"github.com/zclconf/go-cty/cty"
-	"go.rpcplugin.org/rpcplugin"
 )
 
 // Provider is the implementation of tfprovider.Provider for provider plugin
-// protocol version 5.
+// protocol version 6.
 type Provider struct {
 	client tfplugin6.ProviderClient
 	plugin *rpcplugin.Plugin
 	schema *common.Schema
 
-	configured   bool
-	configuredMu *sync.Mutex
+	configured atomic.Bool
 }
 
 func NewProvider(ctx context.Context, plugin *rpcplugin.Plugin, clientProxy interface{}) (*Provider, error) {
-	client := clientProxy.(tfplugin6.ProviderClient)
+	client, ok := clientProxy.(tfplugin6.ProviderClient)
+	if !ok {
+		return nil, fmt.Errorf("expected tfplugin6.ProviderClient, got %T", clientProxy)
+	}
 
 	// We proactively fetch the schema here because you can't really do anything
 	// useful to a provider without it: we need it to serialize any values given
 	// in msgpack format.
 	schema, err := loadSchema(ctx, client)
 	if err != nil {
+		plugin.Close() // Clean up plugin on schema loading failure
 		return nil, err
 	}
 
 	return &Provider{
-		client:     client,
-		plugin:     plugin,
-		schema:     schema,
-		configured: false,
+		client: client,
+		plugin: plugin,
+		schema: schema,
 	}, nil
 }
 
@@ -62,9 +65,7 @@ func (p *Provider) PrepareConfig(ctx context.Context, config cty.Value) (common.
 }
 
 func (p *Provider) Configure(ctx context.Context, config common.Config) common.Diagnostics {
-	p.configuredMu.Lock()
-	defer p.configuredMu.Unlock()
-	if p.configured {
+	if p.configured.Swap(true) {
 		return common.Diagnostics{
 			{
 				Severity: common.Error,
@@ -86,20 +87,18 @@ func (p *Provider) Configure(ctx context.Context, config common.Config) common.D
 		return diags
 	}
 	diags = append(diags, decodeDiagnostics(resp.Diagnostics)...)
-	if !diags.HasErrors() {
-		p.configured = true
+	if diags.HasErrors() {
+		// Reset configured state on error
+		p.configured.Store(false)
 	}
 	return diags
 }
 
 
 func (p *Provider) ManagedResourceType(typeName string) (common.ManagedResourceType, error) {
-	p.configuredMu.Lock()
-	if !p.configured {
-		p.configuredMu.Unlock()
+	if !p.configured.Load() {
 		return nil, fmt.Errorf("provider not configured")
 	}
-	p.configuredMu.Unlock()
 
 	schema, ok := p.schema.ManagedResourceTypes[typeName]
 	if !ok {
@@ -114,12 +113,9 @@ func (p *Provider) ManagedResourceType(typeName string) (common.ManagedResourceT
 }
 
 func (p *Provider) DataResourceType(typeName string) (common.DataResourceType, error) {
-	p.configuredMu.Lock()
-	if !p.configured {
-		p.configuredMu.Unlock()
+	if !p.configured.Load() {
 		return nil, fmt.Errorf("provider not configured")
 	}
-	p.configuredMu.Unlock()
 
 	schema, ok := p.schema.DataResourceTypes[typeName]
 	if !ok {

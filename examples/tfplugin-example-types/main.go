@@ -48,11 +48,11 @@ func showDiagnosticsMaybeExit(diags tfprovider.Diagnostics, provider tfprovider.
 	for _, diag := range diags {
 		switch diag.Severity {
 		case tfprovider.Error:
-			fmt.Fprintf(os.Stderr, "Error: %s; %s", diag.Summary, diag.Detail)
+			fmt.Fprintf(os.Stderr, "Error: %s; %s\n", diag.Summary, diag.Detail)
 		case tfprovider.Warning:
-			fmt.Fprintf(os.Stderr, "Warning: %s; %s", diag.Summary, diag.Detail)
+			fmt.Fprintf(os.Stderr, "Warning: %s; %s\n", diag.Summary, diag.Detail)
 		default:
-			fmt.Fprintf(os.Stderr, "???: %s; %s", diag.Summary, diag.Detail)
+			fmt.Fprintf(os.Stderr, "???: %s; %s\n", diag.Summary, diag.Detail)
 		}
 	}
 	if diags.HasErrors() {

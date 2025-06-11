@@ -3,10 +3,11 @@ package protocol6
 import (
 	"context"
 
-	"github.com/apparentlymart/terraform-provider/internal/tfplugin6"
-	"github.com/apparentlymart/terraform-provider/tfprovider/internal/common"
 	"github.com/apparentlymart/terraform-schema-go/tfschema"
 	"github.com/zclconf/go-cty/cty"
+
+	"github.com/apparentlymart/terraform-provider/internal/tfplugin6"
+	"github.com/apparentlymart/terraform-provider/tfprovider/internal/common"
 )
 
 type DataResourceType struct {
